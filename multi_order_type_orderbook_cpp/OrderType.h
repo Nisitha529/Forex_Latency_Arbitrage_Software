@@ -1,6 +1,6 @@
 enum class OrderType {
     GoodTillCancel,
-    FillandKill,
+    FillAndKill,
     FillOrKill,
     GoodForDay,
     Market
