@@ -1,3 +1,8 @@
+/**
+ * @file Usings.h
+ * @brief Type aliases for common domain types to improve code readability and maintainability.
+ */
+
 #pragma once
 #include <cstdint>
 

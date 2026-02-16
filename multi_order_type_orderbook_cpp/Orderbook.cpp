@@ -1,3 +1,8 @@
+/**
+ * @file Orderbook.cpp
+ * @brief Implementation of the Orderbook class, handling order management,
+ *        matching, and pruning of Good‑For‑Day orders.
+ */
 #include "Orderbook.h"
 
 #include <numeric>
@@ -10,6 +15,11 @@
 #include <cstdint>
 #include <mutex>
 
+/**
+ * @brief Thread-safe wrapper for localtime (Windows/POSIX compatible).
+ * @param t Time to convert.
+ * @return std::tm structure with broken-down local time.
+ */
 std::tm safe_localtime(std::time_t t) {
     std::tm tm{};
 #ifdef _WIN32
@@ -20,6 +30,11 @@ std::tm safe_localtime(std::time_t t) {
     return tm;
 }
 
+/**
+ * @brief Background thread routine that cancels all Good‑For‑Day orders at 16:00 each day.
+ * 
+ * Sleeps until the next 16:00, then collects and cancels all GFD orders.
+ */
 void Orderbook::PruneGoodForDayOrders()
 {    
     using namespace std::chrono;
@@ -69,6 +84,10 @@ void Orderbook::PruneGoodForDayOrders()
 	}
 }
 
+/**
+ * @brief Cancels a list of orders by ID.
+ * @param orderIds Collection of order IDs to cancel.
+ */
 void Orderbook::CancelOrders(OrderIds orderIds)
 {
 	std::scoped_lock ordersLock{ ordersMutex_ };
@@ -77,6 +96,10 @@ void Orderbook::CancelOrders(OrderIds orderIds)
 		CancelOrderInternal(orderId);
 }
 
+/**
+ * @brief Internal cancellation logic (assumes ordersMutex_ is held).
+ * @param orderId ID of the order to cancel.
+ */
 void Orderbook::CancelOrderInternal(OrderId orderId)
 {
 	if (!orders_.contains(orderId))
@@ -105,21 +128,39 @@ void Orderbook::CancelOrderInternal(OrderId orderId)
 	OnOrderCancelled(order);
 }
 
+/**
+ * @brief Callback when an order is cancelled; updates level data.
+ */
 void Orderbook::OnOrderCancelled(OrderPointer order)
 {
 	UpdateLevelData(order->GetPrice(), order->GetRemainingQuantity(), LevelData::Action::Remove);
 }
 
+/**
+ * @brief Callback when an order is added; updates level data.
+ */
 void Orderbook::OnOrderAdded(OrderPointer order)
 {
 	UpdateLevelData(order->GetPrice(), order->GetInitialQuantity(), LevelData::Action::Add);
 }
 
+/**
+ * @brief Callback when an order is matched (partially or fully).
+ * @param price Price level where match occurred.
+ * @param quantity Quantity matched.
+ * @param isFullyFilled True if the order was completely filled.
+ */
 void Orderbook::OnOrderMatched(Price price, Quantity quantity, bool isFullyFilled)
 {
 	UpdateLevelData(price, quantity, isFullyFilled ? LevelData::Action::Remove : LevelData::Action::Match);
 }
 
+/**
+ * @brief Updates aggregated quantity and order count for a price level.
+ * @param price The price level.
+ * @param quantity Quantity change.
+ * @param action Type of action (Add, Remove, Match).
+ */
 void Orderbook::UpdateLevelData(Price price, Quantity quantity, LevelData::Action action)
 {
 	auto& data = data_[price];
@@ -138,6 +179,13 @@ void Orderbook::UpdateLevelData(Price price, Quantity quantity, LevelData::Actio
 		data_.erase(price);
 }
 
+/**
+ * @brief Checks whether a Fill‑Or‑Kill order can be fully filled.
+ * @param side Buy or sell.
+ * @param price Limit price.
+ * @param quantity Order quantity.
+ * @return True if the total quantity across all matching levels is sufficient.
+ */
 bool Orderbook::CanFullyFill(Side side, Price price, Quantity quantity) const
 {
 	if (!CanMatch(side, price))
@@ -176,6 +224,12 @@ bool Orderbook::CanFullyFill(Side side, Price price, Quantity quantity) const
 	return false;
 }
 
+/**
+ * @brief Checks whether an order can be matched at all at the given price.
+ * @param side Buy or sell.
+ * @param price Limit price.
+ * @return True if there is an opposing order at a matching price.
+ */
 bool Orderbook::CanMatch(Side side, Price price) const
 {
 	if (side == Side::Buy)
@@ -196,6 +250,10 @@ bool Orderbook::CanMatch(Side side, Price price) const
 	}
 }
 
+/**
+ * @brief Matches orders at the current best bid/ask until no further matches are possible.
+ * @return List of trades generated.
+ */
 Trades Orderbook::MatchOrders()
 {
 	Trades trades;
@@ -257,6 +315,7 @@ Trades Orderbook::MatchOrders()
         }
 	}
 
+	// Cancel any remaining Fill‑And‑Kill orders at the top of the book
 	if (!bids_.empty())
 	{
 		auto& [_, bids] = *bids_.begin();
@@ -276,8 +335,14 @@ Trades Orderbook::MatchOrders()
 	return trades;
 }
 
+/**
+ * @brief Constructor – starts the background pruning thread.
+ */
 Orderbook::Orderbook() : ordersPruneThread_{ [this] { PruneGoodForDayOrders(); } } { }
 
+/**
+ * @brief Destructor – signals shutdown and joins the pruning thread.
+ */
 Orderbook::~Orderbook()
 {
     shutdown_.store(true, std::memory_order_release);
@@ -285,6 +350,11 @@ Orderbook::~Orderbook()
 	ordersPruneThread_.join();
 }
 
+/**
+ * @brief Adds an order to the book, performs necessary conversions, and attempts to match.
+ * @param order The order to add.
+ * @return List of trades resulting from this addition.
+ */
 Trades Orderbook::AddOrder(OrderPointer order)
 {
 	std::scoped_lock ordersLock{ ordersMutex_ };
@@ -292,6 +362,7 @@ Trades Orderbook::AddOrder(OrderPointer order)
 	if (orders_.contains(order->GetOrderId()))
 		return { };
 
+	// Convert market orders to Good‑Till‑Cancel with the worst opposite price
 	if (order->GetOrderType() == OrderType::Market)
 	{
 		if (order->GetSide() == Side::Buy && !asks_.empty())
@@ -308,12 +379,14 @@ Trades Orderbook::AddOrder(OrderPointer order)
 			return { };
 	}
 
+	// Immediate‑or‑cancel checks
 	if (order->GetOrderType() == OrderType::FillAndKill && !CanMatch(order->GetSide(), order->GetPrice()))
 		return { };
 
 	if (order->GetOrderType() == OrderType::FillOrKill && !CanFullyFill(order->GetSide(), order->GetPrice(), order->GetInitialQuantity()))
 		return { };
 
+	// Insert order into the appropriate side's price level
 	OrderPointers::iterator iterator;
 
 	if (order->GetSide() == Side::Buy)
@@ -337,6 +410,10 @@ Trades Orderbook::AddOrder(OrderPointer order)
 
 }
 
+/**
+ * @brief Cancels a single order by ID.
+ * @param orderId ID of the order to cancel.
+ */
 void Orderbook::CancelOrder(OrderId orderId)
 {
 	std::scoped_lock ordersLock{ ordersMutex_ };
@@ -344,6 +421,11 @@ void Orderbook::CancelOrder(OrderId orderId)
 	CancelOrderInternal(orderId);
 }
 
+/**
+ * @brief Modifies an existing order (cancel + add new).
+ * @param order Modification details.
+ * @return Trades resulting from the modified order.
+ */
 Trades Orderbook::ModifyOrder(OrderModify order)
 {
 	OrderType orderType;
@@ -362,12 +444,19 @@ Trades Orderbook::ModifyOrder(OrderModify order)
 	return AddOrder(order.ToOrderPointer(orderType));
 }
 
+/**
+ * @brief Returns the total number of orders currently in the book.
+ */
 std::size_t Orderbook::Size() const
 {
 	std::scoped_lock ordersLock{ ordersMutex_ };
 	return orders_.size(); 
 }
 
+/**
+ * @brief Constructs a snapshot of the current order book (bids and asks with aggregated quantities).
+ * @return OrderbookLevelInfos containing bid and ask levels.
+ */
 OrderbookLevelInfos Orderbook::GetOrderInfos() const
 {
 	LevelInfos bidInfos, askInfos;

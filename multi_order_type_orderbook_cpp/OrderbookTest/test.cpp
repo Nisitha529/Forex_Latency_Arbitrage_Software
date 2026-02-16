@@ -1,9 +1,21 @@
+/**
+ * @file OrderbookTests.cpp
+ * @brief Parameterized unit tests for Orderbook, reading action scripts from files.
+ * 
+ * This test suite verifies order book behavior by processing sequences of
+ * Add/Modify/Cancel commands from text files and checking the final state
+ * (total order count, bid count, ask count) against expected results.
+ */
+
 #include "pch.h"
 
 #include "../Orderbook.cpp"
 
 namespace googletest = ::testing;
 
+/**
+ * @brief Types of actions that can be performed on the order book.
+ */
 enum class ActionType
 {
     Add,
@@ -11,6 +23,9 @@ enum class ActionType
     Modify,
 };
 
+/**
+ * @brief Represents one action parsed from a test file line.
+ */
 struct Information
 {
     ActionType type_;
@@ -23,6 +38,9 @@ struct Information
 
 using Informations = std::vector<Information>;
 
+/**
+ * @brief Expected final state of the order book after all actions.
+ */
 struct Result
 {
     std::size_t allCount_;
@@ -32,9 +50,16 @@ struct Result
 
 using Results = std::vector<Result>;
 
+/**
+ * @brief Parses test input files into a sequence of actions and an expected result.
+ */
 struct InputHandler
 {
 private:
+    /**
+     * @brief Converts a string view to a numeric value.
+     * @throws std::logic_error if value is negative.
+     */
     std::uint32_t ToNumber(const std::string_view& str) const
     {
         std::int64_t value{};
@@ -44,6 +69,12 @@ private:
         return static_cast<std::uint32_t>(value);
     }
 
+    /**
+     * @brief Attempts to parse a result line (starting with 'R').
+     * @param str The line to parse.
+     * @param result Output parameter to store parsed result.
+     * @return True if parsing succeeded.
+     */
     bool TryParseResult(const std::string_view& str, Result& result) const
     {
         if (str.at(0) != 'R')
@@ -57,6 +88,12 @@ private:
         return true;
     }
 
+    /**
+     * @brief Attempts to parse an action line (starting with 'A', 'M', or 'C').
+     * @param str The line to parse.
+     * @param action Output parameter to store parsed action.
+     * @return True if parsing succeeded.
+     */
     bool TryParseInformation(const std::string_view& str, Information& action) const
     {
         auto value = str.at(0);
@@ -88,6 +125,10 @@ private:
         return true;
     }
 
+    /**
+     * @brief Splits a string view by a delimiter.
+     * @return Vector of string views pointing to parts of the original string.
+     */
     std::vector<std::string_view> Split(const std::string_view& str, char delimeter) const
     {
         std::vector<std::string_view> columns;
@@ -104,6 +145,9 @@ private:
         return columns;
     }
 
+    /**
+     * @brief Converts a string to Side enum.
+     */
     Side ParseSide(const std::string_view& str) const
     {
         if (str == "B")
@@ -113,6 +157,9 @@ private:
         else throw std::logic_error("Unknown Side");
     }
 
+    /**
+     * @brief Converts a string to OrderType enum.
+     */
     OrderType ParseOrderType(const std::string_view& str) const
     {
         if (str == "FillAndKill")
@@ -153,6 +200,12 @@ private:
     }
 
 public:
+    /**
+     * @brief Reads a test file and returns all actions and the expected result.
+     * @param path Path to the test file.
+     * @return Tuple of actions and expected result.
+     * @throws std::logic_error if file format is invalid.
+     */
     std::tuple<Informations, Result> GetInformations(const std::filesystem::path& path) const
     {
         Informations actions;
@@ -198,7 +251,11 @@ public:
     }
 };
 
-
+/**
+ * @brief Test fixture for parameterized order book tests.
+ * 
+ * Sets up the path to the test files directory.
+ */
 class OrderbookTestsFixture : public googletest::TestWithParam<const char*> 
 {
 private:
@@ -208,6 +265,14 @@ public:
     const static inline std::filesystem::path TestFolderPath{ Root / TestFolder };
 };
 
+/**
+ * @brief Parameterized test case that runs one test file.
+ * 
+ * For each test file, it:
+ * 1. Parses actions and expected result.
+ * 2. Executes actions on an Orderbook.
+ * 3. Asserts final state matches expected counts.
+ */
 TEST_P(OrderbookTestsFixture, OrderbookTestSuite)
 {
     // Arrange
@@ -270,6 +335,11 @@ TEST_P(OrderbookTestsFixture, OrderbookTestSuite)
     ASSERT_EQ(orderbookInfos.GetAsks().size(), result.askCount_);
 }
 
+/**
+ * @brief List of test input files to run.
+ * 
+ * Each file contains a sequence of actions and a final 'R' line with expected counts.
+ */
 INSTANTIATE_TEST_CASE_P(Tests, OrderbookTestsFixture, googletest::ValuesIn({
     "Match_GoodTillCancel.txt",
     "Match_FillAndKill.txt",
